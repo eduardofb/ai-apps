@@ -1,0 +1,420 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Sun, Moon, Star, Heart, Cloud, Flower, 
+  Bird, Cat, Fish, PawPrint, Apple, Car, 
+  Volume2, VolumeX, Mic, X, RotateCcw
+} from 'lucide-react';
+
+// --- Configurações e Dados ---
+
+// Paletas pastel (alto contraste mas suaves)
+const PALETTES = [
+  { bg: 'bg-blue-200', text: 'text-blue-800', accent: 'bg-blue-400' },
+  { bg: 'bg-green-200', text: 'text-green-800', accent: 'bg-green-400' },
+  { bg: 'bg-yellow-100', text: 'text-orange-800', accent: 'bg-yellow-400' },
+  { bg: 'bg-purple-200', text: 'text-purple-800', accent: 'bg-purple-400' },
+  { bg: 'bg-rose-200', text: 'text-rose-800', accent: 'bg-rose-400' },
+  { bg: 'bg-orange-100', text: 'text-orange-900', accent: 'bg-orange-300' },
+];
+
+// Objetos amigáveis
+const OBJECTS = [
+  { name: 'Sol', Icon: Sun },
+  { name: 'Lua', Icon: Moon },
+  { name: 'Estrela', Icon: Star },
+  { name: 'Coração', Icon: Heart },
+  { name: 'Nuvem', Icon: Cloud },
+  { name: 'Flor', Icon: Flower },
+  { name: 'Pássaro', Icon: Bird },
+  { name: 'Gato', Icon: Cat },
+  { name: 'Peixe', Icon: Fish },
+  { name: 'Urso', Icon: PawPrint },
+  { name: 'Maçã', Icon: Apple },
+  { name: 'Carro', Icon: Car },
+];
+
+// Escala Pentatônica (Sempre soa bem)
+const NOTES = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25];
+
+// --- Motor de Áudio ---
+let audioCtx = null;
+
+const playTone = (freq, type = 'sine') => {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  
+  // Envelope suave
+  gain.gain.setValueAtTime(0, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  
+  osc.start();
+  osc.stop(audioCtx.currentTime + 1);
+};
+
+// --- Gerenciador de Voz (Texto ou Gravação) ---
+const playVoice = (text, customVoices) => {
+  // 1. Tenta tocar gravação personalizada primeiro
+  if (customVoices && customVoices[text]) {
+    const audio = new Audio(customVoices[text]);
+    audio.play().catch(e => console.error("Erro ao tocar áudio:", e));
+    return;
+  }
+
+  // 2. Fallback para sintetizador (TTS)
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 1.0; // Velocidade normal
+    utterance.pitch = 1.1; // Tom levemente mais agudo
+
+    // Tentar forçar voz feminina (Google Português, Luciana, etc.)
+    const voices = window.speechSynthesis.getVoices();
+    const femaleVoice = voices.find(v => 
+      v.lang === 'pt-BR' && (v.name.includes('Google') || v.name.includes('Luciana') || v.name.includes('Female'))
+    );
+    if (femaleVoice) utterance.voice = femaleVoice;
+
+    window.speechSynthesis.speak(utterance);
+  }
+};
+
+// --- Componente de Gravação ---
+const VoiceRecorderModal = ({ isOpen, onClose, customVoices, onSaveVoice }) => {
+  const [recordingName, setRecordingName] = useState(null);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+
+  if (!isOpen) return null;
+
+  const startRecording = async (name) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      chunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          onSaveVoice(name, reader.result); // Salva como Base64
+        };
+        reader.readAsDataURL(blob);
+        
+        // Parar tracks do microfone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setRecordingName(name);
+    } catch (err) {
+      alert("É necessário permitir o microfone para gravar.");
+      console.error(err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recordingName) {
+      mediaRecorderRef.current.stop();
+      setRecordingName(null);
+    }
+  };
+
+  return (
+    <div className="absolute inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+          <h2 className="text-xl font-bold text-gray-800">Gravar Voz da Mamãe</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
+            <X size={24} />
+          </button>
+        </div>
+        
+        <div className="p-4 overflow-y-auto flex-1">
+          <p className="text-sm text-gray-600 mb-4">
+            Segure o botão para gravar cada palavra. O app usará sua gravação em vez da voz robótica.
+          </p>
+          
+          <div className="grid gap-3">
+            {OBJECTS.map((obj) => (
+              <div key={obj.name} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white rounded-full shadow-sm text-gray-600">
+                    <obj.Icon size={20} />
+                  </div>
+                  <span className="font-medium text-gray-700">{obj.name}</span>
+                </div>
+
+                <div className="flex gap-2">
+                  {/* Botão de Gravar (Segurar) */}
+                  <button
+                    onMouseDown={() => startRecording(obj.name)}
+                    onMouseUp={stopRecording}
+                    onTouchStart={(e) => { e.preventDefault(); startRecording(obj.name); }}
+                    onTouchEnd={(e) => { e.preventDefault(); stopRecording(); }}
+                    className={`px-4 py-2 rounded-full font-bold text-sm transition-all select-none ${
+                      recordingName === obj.name 
+                        ? 'bg-red-500 text-white scale-105' 
+                        : customVoices[obj.name] 
+                          ? 'bg-green-100 text-green-700 border border-green-200' 
+                          : 'bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {recordingName === obj.name ? 'Gravando...' : customVoices[obj.name] ? 'Gravado!' : 'Segure p/ Gravar'}
+                  </button>
+                  
+                  {/* Botão de Testar/Deletar */}
+                  {customVoices[obj.name] && (
+                    <button 
+                      onClick={() => onSaveVoice(obj.name, null)}
+                      className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-full"
+                      title="Apagar gravação"
+                    >
+                      <RotateCcw size={18} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Componente Principal ---
+
+export default function App() {
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [elements, setElements] = useState([]);
+  const [ripples, setRipples] = useState([]);
+  const [isDark, setIsDark] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [showRecorder, setShowRecorder] = useState(false);
+  
+  // Carregar vozes salvas do localStorage
+  const [customVoices, setCustomVoices] = useState(() => {
+    try {
+      const saved = localStorage.getItem('calmCanvas_voices');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) { return {}; }
+  });
+
+  const palette = isDark 
+    ? { bg: 'bg-slate-900', text: 'text-slate-200', accent: 'bg-slate-700' } 
+    : PALETTES[paletteIndex];
+
+  // Salvar vozes
+  const handleSaveVoice = (name, dataUrl) => {
+    const newVoices = { ...customVoices };
+    if (dataUrl) {
+      newVoices[name] = dataUrl;
+    } else {
+      delete newVoices[name];
+    }
+    setCustomVoices(newVoices);
+    try {
+      localStorage.setItem('calmCanvas_voices', JSON.stringify(newVoices));
+    } catch (e) {
+      alert("Atenção: Armazenamento cheio, algumas vozes podem não salvar permanentemente.");
+    }
+  };
+
+  // Limpeza de elementos visuais
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setElements(prev => prev.filter(e => now - e.id < 4000));
+      setRipples(prev => prev.filter(e => now - e.id < 1500));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Carregar vozes do sistema ao iniciar (para o fallback)
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices(); 
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+  }, []);
+
+  const handleInteraction = (x, y) => {
+    if (!isMuted) {
+      const note = NOTES[Math.floor(Math.random() * NOTES.length)];
+      playTone(note, 'sine');
+    }
+
+    const newRipple = { id: Date.now(), x, y };
+    setRipples(prev => [...prev, newRipple]);
+
+    const randomObj = OBJECTS[Math.floor(Math.random() * OBJECTS.length)];
+    const newElement = {
+      id: Date.now(),
+      x,
+      y,
+      ...randomObj,
+      color: isDark ? 'text-yellow-200' : palette.text
+    };
+    
+    setElements(prev => [...prev, newElement]);
+
+    if (!isMuted) {
+      playVoice(randomObj.name, customVoices);
+    }
+  };
+
+  const handleGlobalClick = (e) => {
+    if (showRecorder) return; // Não interagir se modal estiver aberto
+    if (e.target.closest('button') || e.target.closest('.modal-content')) return;
+    handleInteraction(e.clientX, e.clientY);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (showRecorder) return;
+      if(e.key.length === 1) {
+        setPaletteIndex(prev => (prev + 1) % PALETTES.length);
+        
+        if (!isMuted) {
+          const noteIndex = e.key.charCodeAt(0) % NOTES.length;
+          playTone(NOTES[noteIndex], 'triangle');
+        }
+
+        const randomObj = OBJECTS[Math.floor(Math.random() * OBJECTS.length)];
+        const newElement = {
+          id: Date.now(),
+          x: window.innerWidth / 2,
+          y: window.innerHeight / 2,
+          ...randomObj,
+          isBig: true, 
+          color: isDark ? 'text-pink-300' : 'text-white'
+        };
+        setElements(prev => [...prev, newElement]);
+        
+        if (!isMuted) playVoice(randomObj.name, customVoices);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMuted, isDark, customVoices, showRecorder]);
+
+  return (
+    <div 
+      className={`w-screen h-screen overflow-hidden transition-colors duration-1000 ease-in-out relative cursor-pointer ${palette.bg} select-none touch-none`}
+      onClick={handleGlobalClick}
+    >
+      {/* Estilos Dinâmicos */}
+      <style>{`
+        @keyframes floatUp {
+            0% { transform: translateY(0px) rotate(0deg); }
+            100% { transform: translateY(-100px) rotate(10deg); }
+        }
+        .float-element {
+            animation: floatUp 4s ease-out forwards;
+        }
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            transform: scale(0);
+            animation: ripple-effect 1.5s linear;
+            background: rgba(255, 255, 255, 0.4);
+            pointer-events: none;
+        }
+        @keyframes ripple-effect {
+            to { transform: scale(4); opacity: 0; }
+        }
+        @keyframes fadeOut {
+            0% { opacity: 0.5; }
+            80% { opacity: 0.5; }
+            100% { opacity: 0; }
+        }
+      `}</style>
+
+      {/* Ondas */}
+      {ripples.map(r => (
+        <div 
+          key={r.id}
+          className="ripple"
+          style={{ left: r.x - 20, top: r.y - 20, width: 40, height: 40 }}
+        />
+      ))}
+
+      {/* Elementos Flutuantes */}
+      {elements.map(el => (
+        <div 
+          key={el.id}
+          className={`absolute flex flex-col items-center justify-center pointer-events-none float-element ${el.color}`}
+          style={{ left: el.x, top: el.y, transform: 'translate(-50%, -50%)' }}
+        >
+          <div className={`transition-transform duration-500 ${el.isBig ? 'scale-150' : 'scale-100'}`}>
+            <el.Icon size={el.isBig ? 120 : 80} strokeWidth={2.5} />
+          </div>
+          <span className="mt-2 text-2xl font-bold opacity-80 font-sans tracking-widest uppercase shadow-sm">
+            {el.name}
+          </span>
+        </div>
+      ))}
+
+      {/* Controles */}
+      <div className="absolute top-4 right-4 flex gap-2 z-50">
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowRecorder(true); }}
+          className={`p-3 rounded-full shadow-lg transition-all ${Object.keys(customVoices).length > 0 ? 'bg-green-100 text-green-600' : 'bg-white text-gray-800'} opacity-50 hover:opacity-100`}
+          title="Gravar Voz Personalizada"
+        >
+          <Mic size={24} />
+        </button>
+         <button 
+          onClick={(e) => { e.stopPropagation(); setIsDark(!isDark); }}
+          className={`p-3 rounded-full shadow-lg transition-all ${isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-800'} opacity-50 hover:opacity-100`}
+          title="Modo Dia/Noite"
+        >
+          {isDark ? <Sun size={24} /> : <Moon size={24} />}
+        </button>
+        <button 
+          onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
+          className={`p-3 rounded-full shadow-lg transition-all ${isMuted ? 'bg-red-100 text-red-500' : 'bg-white text-gray-800'} opacity-50 hover:opacity-100`}
+          title="Ligar/Desligar Som"
+        >
+          {isMuted ? <VolumeX size={24} /> : <Volume2 size={24} />}
+        </button>
+      </div>
+
+      {/* Modal de Gravação */}
+      <VoiceRecorderModal 
+        isOpen={showRecorder} 
+        onClose={() => setShowRecorder(false)}
+        customVoices={customVoices}
+        onSaveVoice={handleSaveVoice}
+      />
+
+      {/* Instruções */}
+      {!showRecorder && (
+        <div className="absolute bottom-10 left-0 right-0 text-center pointer-events-none animate-[fadeOut_1s_ease-out_5s_forwards]">
+          <p className={`text-lg font-medium opacity-50 ${palette.text}`}>
+            Toque na tela • Aperte teclas • Relaxe
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
